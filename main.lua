@@ -14,7 +14,7 @@ if getgenv and getgenv().TTK_Unload then
     pcall(getgenv().TTK_Unload)
 end
 
-print("[TTK] Initializing core modules...")
+print("[TTK] reading core modules...")
 
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
