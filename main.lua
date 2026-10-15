@@ -1,3 +1,4 @@
+-- making scripts sense 2020
 -- enjoy the source made this for fun i was bored cheifin on my geekbar miami mint - sudo6 (@jn8g)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -13,7 +14,7 @@ if getgenv and getgenv().TTK_Unload then
     pcall(getgenv().TTK_Unload)
 end
 
-print("[TTK] Initializing visual subsystem...")
+print("[TTK] Initializing core modules...")
 
 local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
@@ -47,6 +48,8 @@ local State = {
     TracerLifetime = 0.25,
 
     RecoilDampener = 0,
+    ZeroBloom = false,
+    InstantADS = false,
 
     VmOffsetsEnabled = false,
     DisableOffsetOnADS = true,
@@ -67,6 +70,13 @@ local State = {
         ["omeo3glass"] = true,
         ["lens"] = true
     }
+}
+
+local GLOVE_SKINS = {
+    "DesertTan", "DefaultBlack", "OliveDrab", "CoyoteTan", "Sahara", "RangerTan",
+    "Khaki", "Sage", "Foliage", "DarkEarth", "LightGrey", "WolfGrey", "Plum",
+    "Sandstorm", "BlackCamo", "GreenCamo", "GreenDigital", "GreenDigitalCoyoto",
+    "Flecktarn", "M82"
 }
 
 local ignoreRoot = workspace:FindFirstChild("_CosmeticProjectiles") or workspace:FindFirstChild("Ignore") or workspace
@@ -343,13 +353,19 @@ local function emitPoolTracer()
     end
 end
 
+local originalGetBloomFraction = nil
 local originalFireWeapon = nil
+
 if GunController then
-    if GunController.Fired and typeof(GunController.Fired.Connect) == "function" then
-        registerConn(GunController.Fired:Connect(function()
-            task.defer(emitPoolTracer)
-        end))
-    elseif typeof(GunController.FireWeapon) == "function" then
+    if typeof(GunController.GetEffectiveBloomFraction) == "function" then
+        originalGetBloomFraction = GunController.GetEffectiveBloomFraction
+        GunController.GetEffectiveBloomFraction = function(...)
+            if State.ZeroBloom then return 0 end
+            return originalGetBloomFraction(...)
+        end
+    end
+
+    if typeof(GunController.FireWeapon) == "function" then
         originalFireWeapon = GunController.FireWeapon
         GunController.FireWeapon = function(...)
             local results = { originalFireWeapon(...) }
@@ -367,6 +383,14 @@ registerConn(RunService.RenderStepped:Connect(function(dt)
         local recoilScale = math.clamp(1.7 * (1 - State.RecoilDampener), 0, 1.7)
         if typeof(GunController.CameraFX.SetRecoilAttackScale) == "function" then
             GunController.CameraFX:SetRecoilAttackScale(recoilScale)
+        end
+    end
+
+    if GunController and GunController._attachmentStats then
+        if State.InstantADS then
+            GunController._attachmentStats.AimSpeedMult = 3.5
+        else
+            GunController._attachmentStats.AimSpeedMult = 0.97
         end
     end
 
@@ -422,6 +446,8 @@ local function saveConfig()
         ImpactSparksEnabled = State.ImpactSparksEnabled,
         MuzzleLightEnabled = State.MuzzleLightEnabled,
         RecoilDampener = State.RecoilDampener,
+        ZeroBloom = State.ZeroBloom,
+        InstantADS = State.InstantADS,
         VmOffsetsEnabled = State.VmOffsetsEnabled,
         DisableOffsetOnADS = State.DisableOffsetOnADS,
         OffsetX = State.OffsetX,
@@ -430,7 +456,7 @@ local function saveConfig()
         RollAngle = State.RollAngle
     }
     writefile("TTK_visuals_config.json", HttpService:JSONEncode(data))
-    print("[TTK] Profile saved to TTK_visuals_config.json")
+    print("[TTK] Config saved.")
 end
 
 local function loadConfig()
@@ -450,6 +476,8 @@ local function loadConfig()
     if data.ImpactSparksEnabled ~= nil then State.ImpactSparksEnabled = data.ImpactSparksEnabled end
     if data.MuzzleLightEnabled ~= nil then State.MuzzleLightEnabled = data.MuzzleLightEnabled end
     if data.RecoilDampener ~= nil then State.RecoilDampener = data.RecoilDampener end
+    if data.ZeroBloom ~= nil then State.ZeroBloom = data.ZeroBloom end
+    if data.InstantADS ~= nil then State.InstantADS = data.InstantADS end
     if data.VmOffsetsEnabled ~= nil then State.VmOffsetsEnabled = data.VmOffsetsEnabled end
     if data.DisableOffsetOnADS ~= nil then State.DisableOffsetOnADS = data.DisableOffsetOnADS end
     if data.OffsetX ~= nil then State.OffsetX = data.OffsetX end
@@ -458,7 +486,7 @@ local function loadConfig()
     if data.RollAngle ~= nil then State.RollAngle = data.RollAngle end
 
     applyVisuals()
-    print("[TTK] Profile loaded successfully.")
+    print("[TTK] Config loaded.")
 end
 
 local Window = WindUI:CreateWindow({
@@ -467,7 +495,7 @@ local Window = WindUI:CreateWindow({
     Author = "sudo6",
     Folder = "TTK_Visuals",
     Size = UDim2.fromOffset(630, 510),
-    Keybind = Enum.KeyCode.LeftBracket,
+    Keybind = Enum.KeyCode.RightShift,
     Transparent = true,
     Theme = "Dark",
     SideBarWidth = 195,
@@ -477,7 +505,7 @@ local Window = WindUI:CreateWindow({
 local Tabs = {
     Chams     = Window:Tab({ Title = "Chams & Optics", Icon = "sparkles" }),
     Viewmodel = Window:Tab({ Title = "Offsets", Icon = "move" }),
-    Camera    = Window:Tab({ Title = "Camera & Motion", Icon = "video" }),
+    Combat    = Window:Tab({ Title = "Combat Engine", Icon = "target" }),
     Tracers   = Window:Tab({ Title = "Ballistics", Icon = "zap" }),
     Colors    = Window:Tab({ Title = "Colors", Icon = "palette" }),
     Settings  = Window:Tab({ Title = "Config", Icon = "settings" })
@@ -514,6 +542,23 @@ Tabs.Chams:Slider({
     Callback = function(val)
         State.Transparency = val
         applyVisuals()
+    end
+})
+
+Tabs.Chams:Section({ Title = "Glove Overrides" })
+
+Tabs.Chams:Dropdown({
+    Title = "Select Glove Model",
+    Desc = "Client-side unlock for active glove textures",
+    Values = GLOVE_SKINS,
+    Value = "DesertTan",
+    Callback = function(val)
+        if GunController and typeof(GunController.SetEquippedGlove) == "function" then
+            GunController:SetEquippedGlove(val)
+            task.wait(0.05)
+            local vm = getActiveViewModel()
+            if vm then parseViewModel(vm) end
+        end
     end
 })
 
@@ -569,11 +614,11 @@ Tabs.Viewmodel:Slider({
     Callback = function(val) State.RollAngle = val end
 })
 
-Tabs.Camera:Section({ Title = "Camera Spring Motion" })
+Tabs.Combat:Section({ Title = "Spring Recoil Hooks" })
 
-Tabs.Camera:Slider({
-    Title = "Visual Recoil Dampener",
-    Desc = "Scales CameraFX visual screen shake",
+Tabs.Combat:Slider({
+    Title = "Recoil Attack Scale",
+    Desc = "Direct CameraFX spring suppression",
     Step = 0.05,
     Value = { Min = 0, Max = 1.0, Default = State.RecoilDampener },
     Callback = function(val)
@@ -581,9 +626,27 @@ Tabs.Camera:Slider({
     end
 })
 
-Tabs.Camera:Section({ Title = "Rail Attachments" })
+Tabs.Combat:Toggle({
+    Title = "Zero Spread / Bloom",
+    Desc = "Forces GetEffectiveBloomFraction return value to 0",
+    Value = State.ZeroBloom,
+    Callback = function(val)
+        State.ZeroBloom = val
+    end
+})
 
-Tabs.Camera:Toggle({
+Tabs.Combat:Toggle({
+    Title = "Fast ADS Transition",
+    Desc = "Scales internal AimSpeedMult coefficient",
+    Value = State.InstantADS,
+    Callback = function(val)
+        State.InstantADS = val
+    end
+})
+
+Tabs.Combat:Section({ Title = "Weapon Attachments" })
+
+Tabs.Combat:Toggle({
     Title = "Laser Pointer",
     Desc = "Engine-native laser emitter state",
     Value = false,
@@ -594,7 +657,7 @@ Tabs.Camera:Toggle({
     end
 })
 
-Tabs.Camera:Toggle({
+Tabs.Combat:Toggle({
     Title = "Flashlight",
     Desc = "Engine-native barrel illumination",
     Value = false,
@@ -722,6 +785,10 @@ local function unloadScript()
         GunController.FireWeapon = originalFireWeapon
     end
 
+    if originalGetBloomFraction and GunController then
+        GunController.GetEffectiveBloomFraction = originalGetBloomFraction
+    end
+
     if GunController and GunController.CameraFX and typeof(GunController.CameraFX.SetRecoilAttackScale) == "function" then
         GunController.CameraFX:SetRecoilAttackScale(1.7)
     end
@@ -764,7 +831,7 @@ end
 if getgenv then getgenv().TTK_Unload = unloadScript end
 
 registerConn(UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed and input.KeyCode == Enum.KeyCode.LeftBracket then
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.RightShift then
         if Window and Window.Toggle then
             pcall(function() Window:Toggle() end)
         end
@@ -774,4 +841,4 @@ end))
 local initialVm = getActiveViewModel()
 if initialVm then parseViewModel(initialVm) end
 
-print("[TTK] Visual suite active. Author: sudo6. Keybind: [ { ]")
+print("[TTK] Visual suite active.")
